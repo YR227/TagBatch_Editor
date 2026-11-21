@@ -36,7 +36,7 @@ import shutil
 import datetime
 
 APP_NAME = "TagBatchEditor"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 
 # ---------------------------------------------------------------------------
 # 項目定義
@@ -688,10 +688,12 @@ def run_gui():
 
         # ---- ファイル管理 ----
         def _load(self, paths):
-            known = {it["path"] for it in self.items}
+            known = {os.path.normcase(os.path.abspath(it["path"])) for it in self.items}
             for p in paths:
-                if p in known:
+                key = os.path.normcase(os.path.abspath(p))
+                if key in known:
                     continue
+                known.add(key)
                 try:
                     self.items.append({"path": p, "tags": read_tags(p), "error": None})
                 except Exception as e:
@@ -699,9 +701,100 @@ def run_gui():
             self.refresh()
 
         def add_folder(self):
-            d = filedialog.askdirectory()
-            if d:
-                self._load(collect_files(d, self.recursive.get()))
+            """フォルダを複数選べる専用ダイアログ"""
+            win = tk.Toplevel(self.root)
+            win.title("フォルダを選択（複数選択できます）")
+            win.transient(self.root)
+            win.geometry("%dx%d" % (640 * self.scale, 520 * self.scale))
+
+            start = self.settings.get("last_parent") or os.path.expanduser("~")
+            if not os.path.isdir(start):
+                start = os.path.expanduser("~")
+            cur = tk.StringVar(value=start)
+            entries = []   # Listbox の各行に対応するフォルダのパス
+
+            top = ttk.Frame(win)
+            top.pack(fill="x", padx=8, pady=(8, 4))
+            ttk.Label(top, text="場所:").pack(side="left")
+            ttk.Entry(top, textvariable=cur, state="readonly").pack(side="left", fill="x", expand=True, padx=4)
+
+            def fill():
+                lb.delete(0, "end")
+                entries.clear()
+                base = cur.get()
+                entries.append(base)
+                lb.insert("end", "（このフォルダ自体）  " + os.path.basename(base.rstrip("\\/")) )
+                try:
+                    subs = sorted((e.name for e in os.scandir(base) if e.is_dir() and not e.name.startswith(".")),
+                                  key=str.lower)
+                except OSError as e:
+                    messagebox.showerror("エラー", str(e), parent=win)
+                    subs = []
+                for name in subs:
+                    entries.append(os.path.join(base, name))
+                    lb.insert("end", "▸ " + name)
+
+            def browse():
+                d = filedialog.askdirectory(initialdir=cur.get(), parent=win)
+                if d:
+                    cur.set(os.path.normpath(d))
+                    fill()
+
+            def go_up():
+                parent = os.path.dirname(os.path.normpath(cur.get()))
+                if parent and parent != cur.get():
+                    cur.set(parent)
+                    fill()
+
+            def enter(_evt=None):
+                sel = lb.curselection()
+                if sel and sel[0] > 0:
+                    cur.set(entries[sel[0]])
+                    fill()
+
+            def select_all():
+                lb.selection_set(1, "end")
+
+            def load():
+                sel = [entries[i] for i in lb.curselection()]
+                if not sel:
+                    messagebox.showinfo("フォルダを選択", "読み込むフォルダを選んでください。", parent=win)
+                    return
+                paths = []
+                for d in sel:
+                    paths.extend(collect_files(d, self.recursive.get()))
+                self.settings["last_parent"] = cur.get()
+                win.destroy()
+                if not paths:
+                    messagebox.showinfo("フォルダを追加", "選んだフォルダに対応する音楽ファイルがありませんでした。")
+                    return
+                self._load(paths)
+
+            ttk.Button(top, text="参照…", command=browse).pack(side="left")
+            ttk.Button(top, text="↑ 上の階層へ", command=go_up).pack(side="left", padx=4)
+            ttk.Label(win, foreground="#555",
+                      text="Ctrl / Shift を押しながらクリックで複数選択。ダブルクリックでそのフォルダの中に入ります。"
+                      ).pack(anchor="w", padx=8)
+
+            mid = ttk.Frame(win)
+            mid.pack(fill="both", expand=True, padx=8, pady=4)
+            lb = tk.Listbox(mid, selectmode="extended", activestyle="none")
+            sb = ttk.Scrollbar(mid, orient="vertical", command=lb.yview)
+            lb.configure(yscrollcommand=sb.set)
+            lb.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+            lb.bind("<Double-Button-1>", enter)
+
+            bottom = ttk.Frame(win)
+            bottom.pack(fill="x", padx=8, pady=(4, 8))
+            ttk.Checkbutton(bottom, text="サブフォルダも", variable=self.recursive).pack(side="left")
+            ttk.Button(bottom, text="閉じる", command=win.destroy).pack(side="right")
+            ttk.Button(bottom, text="選択したフォルダを読み込む", command=load).pack(side="right", padx=6)
+            ttk.Button(bottom, text="すべて選択", command=select_all).pack(side="right")
+
+            fill()
+            win.grab_set()
+            lb.focus_set()
 
         def add_files(self):
             fs = filedialog.askopenfilenames(filetypes=[("音楽ファイル", " ".join("*" + e for e in AUDIO_EXTS)),
