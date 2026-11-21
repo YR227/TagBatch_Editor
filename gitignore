@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+tag_editor_settings.json
+tag_backups/
+*.tagtmp
